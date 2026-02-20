@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
-import fitz  # PyMuPDF
+import fitz
 import cv2
 import numpy as np
 import easyocr
@@ -10,10 +10,8 @@ import zipfile
 import os
 from datetime import datetime
 
-# --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Boony System Web", layout="wide")
 
-# --- 2. SISTEM LOGIN ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
@@ -32,12 +30,10 @@ def login():
                     else:
                         st.error("Username/Password Salah!")
 
-# --- 3. ENGINE OCR ---
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'], gpu=False)
 
-# --- 4. LOAD DATABASE INTERNAL ---
 @st.cache_data
 def load_internal_db():
     file_path = "database_master.xlsx"
@@ -50,7 +46,6 @@ def load_internal_db():
             return None
     return None
 
-# --- JALANKAN APLIKASI ---
 if not st.session_state["logged_in"]:
     login()
 else:
@@ -59,10 +54,8 @@ else:
     
     st.title("📂 BAPP Master Pro - Web Edition")
     
-    # --- SIDEBAR: PENGATURAN POSISI NOMOR URUT ---
     with st.sidebar:
         st.header("⚙️ Posisi Nomor Urut")
-        # Pilihan posisi nomor urut sesuai keinginan Anda
         pasang_depan = st.checkbox("Pasang di DEPAN", value=True)
         pasang_belakang = st.checkbox("Pasang di BELAKANG", value=False)
         
@@ -72,11 +65,10 @@ else:
             st.rerun()
 
     if db is None:
-        st.error("❌ File 'database_master.xlsx' tidak ditemukan di GitHub.")
+        st.error("❌ File 'database_master.xlsx' tidak ditemukan/rusak.")
     else:
-        st.success(f"✅ Database Master Aktif ({len(db)} data sekolah)")
+        st.success(f"✅ Database Aktif ({len(db)} data)")
 
-    # MAIN AREA
     st.subheader("📥 Step: Unggah & Rename PDF")
     uploaded_pdfs = st.file_uploader("Pilih file PDF BAPP", type=['pdf'], accept_multiple_files=True)
 
@@ -94,60 +86,54 @@ else:
                         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                         page = doc.load_page(0)
                         
-                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                        # Ambil area lebih luas agar OCR tidak terpotong
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5))
                         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                        roi_h = int(img.shape[0] * 0.35)
+                        # Fokus ke 40% bagian atas PDF
+                        roi_h = int(img.shape[0] * 0.40)
                         crop = img[0:roi_h, :]
                         
                         res = reader.readtext(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), detail=0)
                         teks = " ".join(res).upper()
                         
-                        match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13}|\d{6}/BAPP/[A-Z0-9-]+/\d{4})", teks)
+                        # Regex lebih kuat untuk menangkap variasi teks
+                        match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13}|BAPP/[A-Z0-9-/]+/\d{4})", teks)
                         new_name = pdf_file.name
+                        found_kode = match.group(0) if match else "TIDAK TERBACA"
                         
                         if match:
                             kode = match.group(0)
-                            mask = db.astype(str).apply(lambda x: x.str.contains(kode, na=False)).any(axis=1)
+                            # Bersihkan spasi/karakter aneh di data
+                            mask = db.apply(lambda row: row.astype(str).str.contains(kode, na=False).any(), axis=1)
                             row = db[mask]
                             
                             if not row.empty:
                                 r = row.iloc[0]
-                                npsn = r.get('NPSN', '00000000')
-                                nama_sek = re.sub(r'[\\/*?:"<>|]', "", str(r.get('NAMA_SEKOLAH', 'Unknown'))).replace(" ", "_")
-                                urut = str(r.get('NO_URUT', '0')).split('.')[0].zfill(3)
+                                npsn = str(r.get('NPSN', '00000000')).strip()
+                                nama_sek = re.sub(r'[\\/*?:"<>|]', "", str(r.get('NAMA_SEKOLAH', 'Unknown'))).strip().replace(" ", "_")
+                                urut = str(r.get('NO_URUT', '0')).split('.')[0].strip().zfill(3)
                                 
-                                # Logika Penamaan Fleksibel
                                 name_parts = []
-                                if pasang_depan:
-                                    name_parts.append(urut)
-                                
+                                if pasang_depan: name_parts.append(urut)
                                 name_parts.append(npsn)
                                 name_parts.append(nama_sek)
+                                if pasang_belakang: name_parts.append(urut)
                                 
-                                if pasang_belakang:
-                                    name_parts.append(urut)
-                                
-                                # Gabungkan dengan underscore dan tambahkan satu underscore di akhir
                                 new_name = "_".join(name_parts) + "_.pdf"
-                                logs.append({"File": pdf_file.name, "Hasil": new_name, "Status": "✅"})
+                                logs.append({"File Asli": pdf_file.name, "Kode Terbaca": kode, "Hasil Rename": new_name, "Status": "✅"})
                             else:
-                                new_name = f"TIDAK_DI_DB_{pdf_file.name}"
+                                logs.append({"File Asli": pdf_file.name, "Kode Terbaca": kode, "Hasil Rename": "TIDAK ADA DI DB", "Status": "⚠️"})
                         else:
-                            new_name = f"GAGAL_OCR_{pdf_file.name}"
+                            logs.append({"File Asli": pdf_file.name, "Kode Terbaca": "Gagal Scan", "Hasil Rename": "OCR FAILED", "Status": "❌"})
 
                         zip_file.writestr(new_name, pdf_bytes)
                         doc.close()
                         
                     except Exception as e:
-                        logs.append({"File": pdf_file.name, "Hasil": str(e), "Status": "🔥 Error"})
+                        logs.append({"File Asli": pdf_file.name, "Kode Terbaca": "Error", "Hasil Rename": str(e), "Status": "🔥"})
                     
                     progress_bar.progress((i + 1) / len(uploaded_pdfs))
 
             st.divider()
-            st.download_button(
-                label="📥 DOWNLOAD HASIL RENAME (.ZIP)",
-                data=zip_buffer.getvalue(),
-                file_name=f"BAPP_RENAME_{datetime.now().strftime('%Y%m%d')}.zip",
-                mime="application/zip"
-            )
+            st.download_button("📥 DOWNLOAD HASIL RENAME (.ZIP)", zip_buffer.getvalue(), f"BAPP_{datetime.now().strftime('%H%M')}.zip", "application/zip")
             st.dataframe(pd.DataFrame(logs), use_container_width=True)
