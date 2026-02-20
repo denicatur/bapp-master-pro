@@ -42,9 +42,12 @@ def load_ocr():
 def load_internal_db():
     file_path = "database_master.xlsx"
     if os.path.exists(file_path):
-        df = pd.read_excel(file_path, dtype=str)
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        return df
+        try:
+            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            return df
+        except:
+            return None
     return None
 
 # --- JALANKAN APLIKASI ---
@@ -56,17 +59,12 @@ else:
     
     st.title("📂 BAPP Master Pro - Web Edition")
     
-    # --- SIDEBAR: PENGATURAN PENAMAAN ---
+    # --- SIDEBAR: PENGATURAN POSISI NOMOR URUT ---
     with st.sidebar:
-        st.header("⚙️ Pengaturan Nama File")
-        
-        # Opsi untuk mengatur nomor urut
-        mode_urut = st.radio("Sumber Nomor Urut:", ["Dari Database", "Input Manual"])
-        
-        manual_urut_val = ""
-        if mode_urut == "Input Manual":
-            manual_urut_val = st.text_input("Masukkan No Urut Manual:", "001")
-            st.info("Nomor ini akan dipakai di depan & belakang semua file.")
+        st.header("⚙️ Posisi Nomor Urut")
+        # Pilihan posisi nomor urut sesuai keinginan Anda
+        pasang_depan = st.checkbox("Pasang di DEPAN", value=True)
+        pasang_belakang = st.checkbox("Pasang di BELAKANG", value=False)
         
         st.divider()
         if st.button("Logout"):
@@ -104,7 +102,6 @@ else:
                         res = reader.readtext(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), detail=0)
                         teks = " ".join(res).upper()
                         
-                        # Cari Kode BAPP
                         match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13}|\d{6}/BAPP/[A-Z0-9-]+/\d{4})", teks)
                         new_name = pdf_file.name
                         
@@ -117,15 +114,21 @@ else:
                                 r = row.iloc[0]
                                 npsn = r.get('NPSN', '00000000')
                                 nama_sek = re.sub(r'[\\/*?:"<>|]', "", str(r.get('NAMA_SEKOLAH', 'Unknown'))).replace(" ", "_")
+                                urut = str(r.get('NO_URUT', '0')).split('.')[0].zfill(3)
                                 
-                                # Tentukan Nomor Urut (Database atau Manual)
-                                if mode_urut == "Dari Database":
-                                    urut_final = str(r.get('NO_URUT', '0')).split('.')[0].zfill(3)
-                                else:
-                                    urut_final = manual_urut_val
+                                # Logika Penamaan Fleksibel
+                                name_parts = []
+                                if pasang_depan:
+                                    name_parts.append(urut)
                                 
-                                # FORMAT: [URUT]_[NPSN]_[NAMA]_[URUT]_
-                                new_name = f"{urut_final}_{npsn}_{nama_sek}_{urut_final}_.pdf"
+                                name_parts.append(npsn)
+                                name_parts.append(nama_sek)
+                                
+                                if pasang_belakang:
+                                    name_parts.append(urut)
+                                
+                                # Gabungkan dengan underscore dan tambahkan satu underscore di akhir
+                                new_name = "_".join(name_parts) + "_.pdf"
                                 logs.append({"File": pdf_file.name, "Hasil": new_name, "Status": "✅"})
                             else:
                                 new_name = f"TIDAK_DI_DB_{pdf_file.name}"
