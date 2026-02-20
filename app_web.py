@@ -32,15 +32,15 @@ def login():
                     else:
                         st.error("Username/Password Salah!")
 
-# --- 3. ENGINE OCR (LOAD SEKALI SAJA) ---
+# --- 3. ENGINE OCR ---
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'], gpu=False)
 
-# --- 4. DATABASE HANDLER (LOAD DARI FILE INTERNAL) ---
+# --- 4. LOAD DATABASE INTERNAL ---
 @st.cache_data
 def load_internal_db():
-    # Mengambil file yang sudah ada di folder GitHub
+    # Membaca file database master yang sudah digabung
     file_path = "database_master.xlsx"
     if os.path.exists(file_path):
         df = pd.read_excel(file_path, dtype=str)
@@ -53,14 +53,14 @@ if not st.session_state["logged_in"]:
     login()
 else:
     reader = load_ocr()
-    db = load_internal_db() # Database otomatis terisi
+    db = load_internal_db()
     
     st.title("📂 BAPP Master Pro - Web Edition")
     
     if db is None:
-        st.error("❌ File 'database_master.xlsx' tidak ditemukan di GitHub. Harap unggah filenya dulu.")
+        st.error("❌ File 'database_master.xlsx' tidak ditemukan di GitHub. Pastikan file sudah diunggah.")
     else:
-        st.success(f"✅ Database Internal Aktif ({len(db)} data sekolah terdaftar)")
+        st.success(f"✅ Database Master Aktif ({len(db)} data sekolah dari 3 vendor terdeteksi)")
 
     with st.sidebar:
         st.header("⚙️ Menu")
@@ -68,9 +68,8 @@ else:
             st.session_state["logged_in"] = False
             st.rerun()
 
-    # MAIN AREA UNTUK PDF
     st.subheader("📥 Step: Unggah & Rename PDF")
-    uploaded_pdfs = st.file_uploader("Pilih file PDF yang akan di-rename", type=['pdf'], accept_multiple_files=True)
+    uploaded_pdfs = st.file_uploader("Pilih file PDF BAPP", type=['pdf'], accept_multiple_files=True)
 
     if uploaded_pdfs and db is not None:
         if st.button("🚀 PROSES SEKARANG", type="primary"):
@@ -94,12 +93,14 @@ else:
                         res = reader.readtext(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), detail=0)
                         teks = " ".join(res).upper()
                         
-                        match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13})", teks)
+                        # Regex diperluas untuk mencakup pola Zyrex, IFP, dan Mastermedia
+                        match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13}|\d{6}/BAPP/[A-Z0-9-]+/\d{4})", teks)
                         new_name = pdf_file.name
                         
                         if match:
                             kode = match.group(0)
-                            mask = db.astype(str).apply(lambda x: x.str.contains(kode)).any(axis=1)
+                            # Pencocokan fleksibel di semua kolom database
+                            mask = db.astype(str).apply(lambda x: x.str.contains(kode, na=False)).any(axis=1)
                             row = db[mask]
                             
                             if not row.empty:
@@ -108,15 +109,13 @@ else:
                                 nama_sek = re.sub(r'[\\/*?:"<>|]', "", str(r.get('NAMA_SEKOLAH', 'Unknown'))).replace(" ", "_")
                                 urut = str(r.get('NO_URUT', '0')).split('.')[0].zfill(3)
                                 
-                                # FORMAT BARU: URUT_NPSN_NAMA_
-                                new_name = f"{urut}_{npsn}_{nama_sek}_.pdf"
-                                logs.append({"File": pdf_file.name, "Hasil": new_name, "Status": "✅ Berhasil"})
+                                # FORMAT BARU: NO URUT DI DEPAN DAN BELAKANG
+                                new_name = f"{urut}_{npsn}_{nama_sek}_{urut}.pdf"
+                                logs.append({"File": pdf_file.name, "Hasil": new_name, "Status": "✅"})
                             else:
-                                new_name = f"TAK_ADA_DI_DB_{pdf_file.name}"
-                                logs.append({"File": pdf_file.name, "Hasil": "Data tidak ditemukan", "Status": "⚠️"})
+                                new_name = f"KODE_TIDAK_ADA_DI_DB_{pdf_file.name}"
                         else:
-                            new_name = f"GAGAL_SCAN_{pdf_file.name}"
-                            logs.append({"File": pdf_file.name, "Hasil": "Kode tidak terbaca", "Status": "❌"})
+                            new_name = f"GAGAL_OCR_{pdf_file.name}"
 
                         zip_file.writestr(new_name, pdf_bytes)
                         doc.close()
