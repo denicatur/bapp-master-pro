@@ -1,0 +1,9 @@
+streamlit
+pandas
+openpyxl
+easyocr
+pymupdf
+opencv-python-headless
+numpy
+segno
+pillow
