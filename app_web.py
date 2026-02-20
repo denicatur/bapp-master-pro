@@ -40,7 +40,6 @@ def load_ocr():
 # --- 4. LOAD DATABASE INTERNAL ---
 @st.cache_data
 def load_internal_db():
-    # Membaca file database master yang sudah digabung
     file_path = "database_master.xlsx"
     if os.path.exists(file_path):
         df = pd.read_excel(file_path, dtype=str)
@@ -57,17 +56,29 @@ else:
     
     st.title("📂 BAPP Master Pro - Web Edition")
     
-    if db is None:
-        st.error("❌ File 'database_master.xlsx' tidak ditemukan di GitHub. Pastikan file sudah diunggah.")
-    else:
-        st.success(f"✅ Database Master Aktif ({len(db)} data sekolah dari 3 vendor terdeteksi)")
-
+    # --- SIDEBAR: PENGATURAN PENAMAAN ---
     with st.sidebar:
-        st.header("⚙️ Menu")
+        st.header("⚙️ Pengaturan Nama File")
+        
+        # Opsi untuk mengatur nomor urut
+        mode_urut = st.radio("Sumber Nomor Urut:", ["Dari Database", "Input Manual"])
+        
+        manual_urut_val = ""
+        if mode_urut == "Input Manual":
+            manual_urut_val = st.text_input("Masukkan No Urut Manual:", "001")
+            st.info("Nomor ini akan dipakai di depan & belakang semua file.")
+        
+        st.divider()
         if st.button("Logout"):
             st.session_state["logged_in"] = False
             st.rerun()
 
+    if db is None:
+        st.error("❌ File 'database_master.xlsx' tidak ditemukan di GitHub.")
+    else:
+        st.success(f"✅ Database Master Aktif ({len(db)} data sekolah)")
+
+    # MAIN AREA
     st.subheader("📥 Step: Unggah & Rename PDF")
     uploaded_pdfs = st.file_uploader("Pilih file PDF BAPP", type=['pdf'], accept_multiple_files=True)
 
@@ -93,13 +104,12 @@ else:
                         res = reader.readtext(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), detail=0)
                         teks = " ".join(res).upper()
                         
-                        # Regex diperluas untuk mencakup pola Zyrex, IFP, dan Mastermedia
+                        # Cari Kode BAPP
                         match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13}|\d{6}/BAPP/[A-Z0-9-]+/\d{4})", teks)
                         new_name = pdf_file.name
                         
                         if match:
                             kode = match.group(0)
-                            # Pencocokan fleksibel di semua kolom database
                             mask = db.astype(str).apply(lambda x: x.str.contains(kode, na=False)).any(axis=1)
                             row = db[mask]
                             
@@ -107,13 +117,18 @@ else:
                                 r = row.iloc[0]
                                 npsn = r.get('NPSN', '00000000')
                                 nama_sek = re.sub(r'[\\/*?:"<>|]', "", str(r.get('NAMA_SEKOLAH', 'Unknown'))).replace(" ", "_")
-                                urut = str(r.get('NO_URUT', '0')).split('.')[0].zfill(3)
                                 
-                                # FORMAT BARU: NO URUT DI DEPAN DAN BELAKANG
-                                new_name = f"{urut}_{npsn}_{nama_sek}_{urut}.pdf"
+                                # Tentukan Nomor Urut (Database atau Manual)
+                                if mode_urut == "Dari Database":
+                                    urut_final = str(r.get('NO_URUT', '0')).split('.')[0].zfill(3)
+                                else:
+                                    urut_final = manual_urut_val
+                                
+                                # FORMAT: [URUT]_[NPSN]_[NAMA]_[URUT]_
+                                new_name = f"{urut_final}_{npsn}_{nama_sek}_{urut_final}_.pdf"
                                 logs.append({"File": pdf_file.name, "Hasil": new_name, "Status": "✅"})
                             else:
-                                new_name = f"KODE_TIDAK_ADA_DI_DB_{pdf_file.name}"
+                                new_name = f"TIDAK_DI_DB_{pdf_file.name}"
                         else:
                             new_name = f"GAGAL_OCR_{pdf_file.name}"
 
