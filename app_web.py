@@ -55,9 +55,14 @@ else:
     st.title("📂 BAPP Master Pro - Web Edition")
     
     with st.sidebar:
-        st.header("⚙️ Posisi Nomor Urut")
-        pasang_depan = st.checkbox("Pasang di DEPAN", value=True)
-        pasang_belakang = st.checkbox("Pasang di BELAKANG", value=False)
+        st.header("⚙️ Konfigurasi Nama")
+        pasang_depan = st.checkbox("Pasang No Urut di DEPAN", value=True)
+        pasang_belakang = st.checkbox("Pasang No Urut di BELAKANG", value=False)
+        
+        st.divider()
+        st.header("📂 Fitur Folder")
+        # Aktifkan sortir per folder
+        split_by_provinsi = st.toggle("Pisahkan File per Folder Provinsi", value=True)
         
         st.divider()
         if st.button("Logout"):
@@ -65,7 +70,7 @@ else:
             st.rerun()
 
     if db is None:
-        st.error("❌ File 'database_master.xlsx' tidak ditemukan/rusak.")
+        st.error("❌ File 'database_master.xlsx' tidak ditemukan.")
     else:
         st.success(f"✅ Database Aktif ({len(db)} data)")
 
@@ -74,66 +79,78 @@ else:
 
     if uploaded_pdfs and db is not None:
         if st.button("🚀 PROSES SEKARANG", type="primary"):
-            zip_buffer = io.BytesIO()
-            logs = []
+            all_results = []
+            progress_bar = st.progress(0)
             
-            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                progress_bar = st.progress(0)
-                
-                for i, pdf_file in enumerate(uploaded_pdfs):
-                    try:
-                        pdf_bytes = pdf_file.read()
-                        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                        page = doc.load_page(0)
-                        
-                        # Ambil area lebih luas agar OCR tidak terpotong
-                        pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5))
-                        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                        # Fokus ke 40% bagian atas PDF
-                        roi_h = int(img.shape[0] * 0.40)
-                        crop = img[0:roi_h, :]
-                        
-                        res = reader.readtext(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), detail=0)
-                        teks = " ".join(res).upper()
-                        
-                        # Regex lebih kuat untuk menangkap variasi teks
-                        match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13}|BAPP/[A-Z0-9-/]+/\d{4})", teks)
-                        new_name = pdf_file.name
-                        found_kode = match.group(0) if match else "TIDAK TERBACA"
-                        
-                        if match:
-                            kode = match.group(0)
-                            # Bersihkan spasi/karakter aneh di data
-                            mask = db.apply(lambda row: row.astype(str).str.contains(kode, na=False).any(), axis=1)
-                            row = db[mask]
-                            
-                            if not row.empty:
-                                r = row.iloc[0]
-                                npsn = str(r.get('NPSN', '00000000')).strip()
-                                nama_sek = re.sub(r'[\\/*?:"<>|]', "", str(r.get('NAMA_SEKOLAH', 'Unknown'))).strip().replace(" ", "_")
-                                urut = str(r.get('NO_URUT', '0')).split('.')[0].strip().zfill(3)
-                                
-                                name_parts = []
-                                if pasang_depan: name_parts.append(urut)
-                                name_parts.append(npsn)
-                                name_parts.append(nama_sek)
-                                if pasang_belakang: name_parts.append(urut)
-                                
-                                new_name = "_".join(name_parts) + "_.pdf"
-                                logs.append({"File Asli": pdf_file.name, "Kode Terbaca": kode, "Hasil Rename": new_name, "Status": "✅"})
-                            else:
-                                logs.append({"File Asli": pdf_file.name, "Kode Terbaca": kode, "Hasil Rename": "TIDAK ADA DI DB", "Status": "⚠️"})
-                        else:
-                            logs.append({"File Asli": pdf_file.name, "Kode Terbaca": "Gagal Scan", "Hasil Rename": "OCR FAILED", "Status": "❌"})
-
-                        zip_file.writestr(new_name, pdf_bytes)
-                        doc.close()
-                        
-                    except Exception as e:
-                        logs.append({"File Asli": pdf_file.name, "Kode Terbaca": "Error", "Hasil Rename": str(e), "Status": "🔥"})
+            for i, pdf_file in enumerate(uploaded_pdfs):
+                try:
+                    pdf_bytes = pdf_file.read()
+                    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    page = doc.load_page(0)
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5))
+                    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                    roi_h = int(img.shape[0] * 0.40)
+                    crop = img[0:roi_h, :]
                     
-                    progress_bar.progress((i + 1) / len(uploaded_pdfs))
+                    res = reader.readtext(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), detail=0)
+                    teks = " ".join(res).upper()
+                    
+                    match = re.search(r"(ZMB/\d{2}/\d{5}|HI\d{13}|BAPP/[A-Z0-9-/]+/\d{4})", teks)
+                    
+                    # Data default
+                    npsn, nama_sek, urut, provinsi = "00000000", "Unknown", "000", "TANPA_PROVINSI"
+                    status, kode_terbaca = "❌", "Gagal Scan"
+                    
+                    if match:
+                        kode_terbaca = match.group(0)
+                        mask = db.apply(lambda row: row.astype(str).str.contains(kode_terbaca, na=False).any(), axis=1)
+                        row_data = db[mask]
+                        
+                        if not row_data.empty:
+                            r = row_data.iloc[0]
+                            npsn = str(r.get('NPSN', '00000000')).strip()
+                            nama_sek = re.sub(r'[\\/*?:"<>|]', "", str(r.get('NAMA_SEKOLAH', 'Unknown'))).strip().replace(" ", "_")
+                            urut = str(r.get('NO_URUT', '0')).split('.')[0].strip().zfill(3)
+                            # Ambil data provinsi
+                            provinsi = re.sub(r'[\\/*?:"<>|]', "", str(r.get('PROVINSI', 'TANPA_PROVINSI'))).strip().replace(" ", "_")
+                            status = "✅"
+
+                    # Susun Nama Baru
+                    name_parts = []
+                    if pasang_depan: name_parts.append(urut)
+                    name_parts.append(npsn)
+                    name_parts.append(nama_sek)
+                    if pasang_belakang: name_parts.append(urut)
+                    new_name = "_".join(name_parts) + "_.pdf"
+
+                    all_results.append({
+                        "PROVINSI": provinsi,
+                        "HASIL_RENAME": new_name,
+                        "BYTES": pdf_bytes,
+                        "STATUS": status,
+                        "KODE": kode_terbaca
+                    })
+                    doc.close()
+                except Exception as e:
+                    all_results.append({"PROVINSI": "ERROR", "HASIL_RENAME": pdf_file.name, "BYTES": pdf_bytes, "STATUS": "🔥", "KODE": str(e)})
+                
+                progress_bar.progress((i + 1) / len(uploaded_pdfs))
+
+            # --- PROSES ZIPPING PER FOLDER ---
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                for res in all_results:
+                    if split_by_provinsi:
+                        # Masukkan ke dalam folder (Nama_Provinsi/Nama_File.pdf)
+                        zip_path = f"{res['PROVINSI']}/{res['HASIL_RENAME']}"
+                    else:
+                        zip_path = res['HASIL_RENAME']
+                    
+                    zip_file.writestr(zip_path, res['BYTES'])
 
             st.divider()
-            st.download_button("📥 DOWNLOAD HASIL RENAME (.ZIP)", zip_buffer.getvalue(), f"BAPP_{datetime.now().strftime('%H%M')}.zip", "application/zip")
-            st.dataframe(pd.DataFrame(logs), use_container_width=True)
+            st.success(f"Selesai! File telah dikelompokkan berdasarkan Provinsi.")
+            st.download_button("📥 DOWNLOAD HASIL ZIP", zip_buffer.getvalue(), f"BAPP_PER_PROVINSI_{datetime.now().strftime('%H%M')}.zip")
+            
+            # Tampilkan tabel rekap
+            st.dataframe(pd.DataFrame(all_results).drop(columns=['BYTES']), use_container_width=True)
